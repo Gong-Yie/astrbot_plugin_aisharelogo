@@ -1,34 +1,76 @@
-import os
 import io
 import re
 import aiohttp
 import asyncio
 import uuid
+from pathlib import Path
 from PIL import Image, ImageDraw, ImageFont
 
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star, register, StarTools
 from astrbot.api import logger, AstrBotConfig
-# 引入 At 组件用于解析 @别人
 from astrbot.api.message_components import Image as AstrImage, Plain, At
 
 # 统一工作尺寸
 WORK_WIDTH = 1000
 WORK_HEIGHT = 1000
 
-@register("ailogo", "YourName", "自动生成Logo覆盖图片的插件", "1.0.0")
+@register("aisharelogo", "工一阵", "制作分钱logo", "1.0")
 class AILogoPlugin(Star):
     def __init__(self, context: Context, config: AstrBotConfig):
         super().__init__(context)
         self.config = config
         
-        # 初始化目录
-        self.plugin_dir = os.path.dirname(os.path.abspath(__file__))
-        self.font_dir = os.path.join(self.plugin_dir, "font")
-        self.logo_dir = os.path.join(self.plugin_dir, "logo")
+        # 1. 插件源码自带目录 (存放 GitHub 上克隆下来的默认素材)
+        self.plugin_dir = Path(__file__).parent
+        self.plugin_font_dir = self.plugin_dir / "font"
+        self.plugin_logo_dir = self.plugin_dir / "logo"
         
-        os.makedirs(self.font_dir, exist_ok=True)
-        os.makedirs(self.logo_dir, exist_ok=True)
+        # 2. 用户数据标准目录 (推荐用户自己添加素材的地方，防止更新被覆盖)
+        self.data_dir = StarTools.get_data_dir("ailogo")
+        self.data_font_dir = self.data_dir / "font"
+        self.data_logo_dir = self.data_dir / "logo"
+        
+        # 确保目录存在
+        self.plugin_font_dir.mkdir(parents=True, exist_ok=True)
+        self.plugin_logo_dir.mkdir(parents=True, exist_ok=True)
+        self.data_font_dir.mkdir(parents=True, exist_ok=True)
+        self.data_logo_dir.mkdir(parents=True, exist_ok=True)
+
+    # ================= 资源寻址工具 =================
+
+    def get_asset_path(self, filename: str, asset_type: str) -> Path:
+        """双目录寻址：优先从 data_dir 找，找不到再去 plugin_dir 找"""
+        if not filename:
+            return None
+            
+        data_path = self.data_font_dir if asset_type == "font" else self.data_logo_dir
+        plugin_path = self.plugin_font_dir if asset_type == "font" else self.plugin_logo_dir
+        
+        # 优先查找用户数据目录
+        target1 = data_path / filename
+        if target1.exists() and target1.is_file():
+            return target1
+            
+        # 兜底查找插件自带目录
+        target2 = plugin_path / filename
+        if target2.exists() and target2.is_file():
+            return target2
+            
+        return None
+
+    def get_all_assets(self, asset_type: str) -> list[str]:
+        """合并双目录中的所有素材文件，并去重"""
+        data_path = self.data_font_dir if asset_type == "font" else self.data_logo_dir
+        plugin_path = self.plugin_font_dir if asset_type == "font" else self.plugin_logo_dir
+        
+        assets = set()
+        if data_path.exists():
+            assets.update(f.name for f in data_path.iterdir() if f.is_file())
+        if plugin_path.exists():
+            assets.update(f.name for f in plugin_path.iterdir() if f.is_file())
+            
+        return sorted(list(assets))
 
     # ================= 图像处理核心 =================
 
@@ -36,26 +78,31 @@ class AILogoPlugin(Star):
         conf_size = self.config.get("font_size", 0)
         if conf_size > 0:
             try:
-                return ImageFont.truetype(font_path, conf_size)
+                return ImageFont.truetype(str(font_path), conf_size)
             except IOError:
                 return ImageFont.load_default()
 
         target_width = WORK_WIDTH * target_width_ratio
         font_size = 50
+        max_font_size = 800
+        
         try:
-            font = ImageFont.truetype(font_path, font_size)
+            font = ImageFont.truetype(str(font_path), font_size)
         except IOError:
             logger.error(f"无法加载字体 '{font_path}'。")
             return ImageFont.load_default()
 
-        while True:
+        while font_size < max_font_size:
             dummy_draw = ImageDraw.Draw(Image.new("RGBA", (1, 1)))
             bbox = dummy_draw.textbbox((0, 0), text, font=font)
             text_w = bbox[2] - bbox[0]
             if text_w >= target_width:
                 break
             font_size += 5
-            font = ImageFont.truetype(font_path, font_size)
+            try:
+                font = ImageFont.truetype(str(font_path), font_size)
+            except IOError:
+                break
         return font
 
     def draw_thick_shadow_text(self, draw, x, y, text, font, text_color, shadow_color, shadow_depth=8):
@@ -64,7 +111,6 @@ class AILogoPlugin(Star):
         draw.text((x, y), text, font=font, fill=text_color)
 
     def process_image(self, base_image_bytes, bg_path, font_path, text_content, style_type, out_file_path):
-        """核心处理逻辑，直接保存为临时文件"""
         base_image = Image.open(io.BytesIO(base_image_bytes)).convert("RGBA")
         canvas = base_image.resize((WORK_WIDTH, WORK_HEIGHT), Image.Resampling.LANCZOS)
 
@@ -94,20 +140,17 @@ class AILogoPlugin(Star):
         else:
             dummy_draw.text((text_x, text_y), text_content, font=font, fill=(255, 215, 0))
 
-        # 保存为指定路径的临时文件
         canvas.save(out_file_path, format='PNG')
         return out_file_path
 
     # ================= 消息链深层提取 =================
     
     def extract_image_url(self, message_chain) -> str:
-        """递归查找消息链及嵌套组件中的图片 URL"""
         if not message_chain:
             return None
         for comp in message_chain:
             if isinstance(comp, AstrImage):
                 return getattr(comp, "url", getattr(comp, "file", None))
-            # 探索引用、合并转发等深层嵌套
             for attr in ['content', 'message', 'chain', 'components', 'nodes']:
                 if hasattr(comp, attr):
                     nested = getattr(comp, attr)
@@ -120,8 +163,7 @@ class AILogoPlugin(Star):
 
     @filter.command("lsfont")
     async def lsfont(self, event: AstrMessageEvent):
-        """列出 font 目录下的字体文件"""
-        fonts = [f for f in os.listdir(self.font_dir) if os.path.isfile(os.path.join(self.font_dir, f))]
+        fonts = self.get_all_assets("font")
         if not fonts:
             yield event.plain_result("font 文件夹为空，请先放入字体文件。")
             return
@@ -129,8 +171,7 @@ class AILogoPlugin(Star):
 
     @filter.command("lslogo")
     async def lslogo(self, event: AstrMessageEvent):
-        """列出 logo 目录下的模板文件"""
-        logos = [f for f in os.listdir(self.logo_dir) if os.path.isfile(os.path.join(self.logo_dir, f))]
+        logos = self.get_all_assets("logo")
         if not logos:
             yield event.plain_result("logo 文件夹为空，请先放入模板文件。")
             return
@@ -138,28 +179,26 @@ class AILogoPlugin(Star):
 
     @filter.command("changefont")
     async def changefont(self, event: AstrMessageEvent, font_name: str):
-        """切换默认字体，参数为 font 目录下的字体文件名（带后缀）"""
-        if not os.path.exists(os.path.join(self.font_dir, font_name)):
-            yield event.plain_result(f"❌ 字体 {font_name} 不存在于 font 目录中！")
+        safe_font_name = Path(font_name).name
+        if not self.get_asset_path(safe_font_name, "font"):
+            yield event.plain_result(f"字体 {safe_font_name} 不存在于任何 font 目录中！")
             return
-        self.config["default_font"] = font_name
+        self.config["default_font"] = safe_font_name
         self.config.save_config()
-        yield event.plain_result(f"✅ 字体已成功切换为 {font_name}")
+        yield event.plain_result(f"字体已成功切换为 {safe_font_name}")
 
     @filter.command("changelogo")
     async def changelogo(self, event: AstrMessageEvent, logo_name: str):
-        """切换默认模板，参数为 logo 目录下的模板文件名（带后缀）"""
-        if not os.path.exists(os.path.join(self.logo_dir, logo_name)):
-            yield event.plain_result(f"❌ 模板 {logo_name} 不存在于 logo 目录中！")
+        safe_logo_name = Path(logo_name).name
+        if not self.get_asset_path(safe_logo_name, "logo"):
+            yield event.plain_result(f"模板 {safe_logo_name} 不存在于任何 logo 目录中！")
             return
-        self.config["default_logo"] = logo_name
+        self.config["default_logo"] = safe_logo_name
         self.config.save_config()
-        yield event.plain_result(f"✅ 模板样式已成功切换为 {logo_name}")
+        yield event.plain_result(f"模板样式已成功切换为 {safe_logo_name}")
 
     @filter.command("ailogo")
     async def ailogo(self, event: AstrMessageEvent):
-        """主指令，生成分钱 Logo"""
-        # 1. 规范提取文字：AstrBot 的 message_str 只会拼接纯文本，自动过滤图文和 @
         full_text = event.message_str.strip()
         parts = full_text.split(maxsplit=1)
         if len(parts) > 1 and parts[1].strip():
@@ -167,26 +206,23 @@ class AILogoPlugin(Star):
         else:
             text_content = "分10亿"
 
-        # 2. 检查前置配置与素材状态
         font_file = self.config.get("default_font", "")
         logo_file = self.config.get("default_logo", "")
-        font_path = os.path.join(self.font_dir, font_file)
-        bg_path = os.path.join(self.logo_dir, logo_file)
-
-        if not font_file or not os.path.exists(font_path):
-            yield event.plain_result("❌ 请先在配置面板设置 default_font 或使用 /changefont 设置有效字体。")
-            return
-        if not logo_file or not os.path.exists(bg_path):
-            yield event.plain_result("❌ 请先在配置面板设置 default_logo 或使用 /changelogo 设置有效模板。")
-            return
-
-        # 3. 优先级策略解析目标图像
-        message_chain = event.get_messages()
         
-        # 优先级 1：提取真实图片（涵盖场景 1、2、3）
+        # 动态寻址
+        font_path = self.get_asset_path(font_file, "font")
+        bg_path = self.get_asset_path(logo_file, "logo")
+
+        if not font_file or not font_path:
+            yield event.plain_result("请先在配置面板设置 default_font 或使用 /changefont 设置有效字体。")
+            return
+        if not logo_file or not bg_path:
+            yield event.plain_result("请先在配置面板设置 default_logo 或使用 /changelogo 设置有效模板。")
+            return
+
+        message_chain = event.get_messages()
         image_url = self.extract_image_url(message_chain)
         
-        # 平台底层的正则兜底（针对未被框架展平的图片）
         if not image_url:
             raw_msg = getattr(event.message_obj, "raw_message", {})
             raw_str = str(raw_msg)
@@ -196,61 +232,55 @@ class AILogoPlugin(Star):
             if match:
                 image_url = match.group(1)
 
-        # 优先级 2 & 3：没有图片时的头像兜底逻辑
         if not image_url:
             target_qq = None
-            # 寻找 @ 目标（涵盖场景 5）
             for comp in message_chain:
                 if isinstance(comp, At):
                     target_qq = getattr(comp, "qq", getattr(comp, "id", None))
                     break
             
             if target_qq:
-                # 场景 5：有 @ 对象，明确使用被 @ 人的头像
                 image_url = f"http://q1.qlogo.cn/g?b=qq&nk={target_qq}&s=640"
             elif self.config.get("use_avatar_if_no_image", True):
-                # 场景 4：没图也没 @，但配置开启了使用自身头像兜底
                 sender_id = event.get_sender_id()
                 image_url = f"http://q1.qlogo.cn/g?b=qq&nk={sender_id}&s=640"
             else:
-                yield event.plain_result("❌ 缺少图片。请在发送指令时附带图片、引用图片，或 @ 一名群友。")
+                yield event.plain_result("缺少图片。请在发送指令时附带图片、引用图片，或 @ 一名群友。")
                 return
 
-        # 4. 获取图片数据并生成
-        yield event.plain_result("🚀 正在生成中，请稍候...")
-        img_data = None
+        yield event.plain_result("正在生成中，请稍候...")
+        
         try:
+            img_data = None
             if image_url.startswith("http"):
                 async with aiohttp.ClientSession() as session:
                     async with session.get(image_url) as resp:
                         if resp.status != 200:
-                            yield event.plain_result("❌ 无法下载图片，请重试。")
+                            yield event.plain_result(f"无法下载图片，网络状态码: {resp.status}")
                             return
                         img_data = await resp.read()
-            elif os.path.exists(image_url):  
-                with open(image_url, "rb") as f:
-                    img_data = f.read()
+            elif Path(image_url).exists():  
+                img_data = Path(image_url).read_bytes()
             else:
-                yield event.plain_result("❌ 无法识别的图片来源。")
+                yield event.plain_result("无法识别的图片来源。")
                 return
             
             style_type = self.config.get("style_type", 1)
-            
-            # 临时文件保证阅后即焚，不占用服务器硬盘
             temp_filename = f"temp_logo_{uuid.uuid4().hex}.png"
-            temp_filepath = os.path.join(self.plugin_dir, temp_filename)
+            temp_filepath = self.data_dir / temp_filename
             
-            self.process_image(img_data, bg_path, font_path, text_content, style_type, temp_filepath)
+            await asyncio.tothread(
+                self.process_image,
+                img_data, str(bg_path), str(font_path), text_content, style_type, str(temp_filepath)
+            )
 
-            # 5. 返回合成好的图片
-            yield event.chain_result([AstrImage.fromFileSystem(temp_filepath)])
+            yield event.chain_result([AstrImage.fromFileSystem(str(temp_filepath))])
 
-            # 6. 异步清理任务
-            async def cleanup_temp_file(filepath):
+            async def cleanup_temp_file(filepath: Path):
                 await asyncio.sleep(3)
-                if os.path.exists(filepath):
+                if filepath.exists():
                     try:
-                        os.remove(filepath)
+                        filepath.unlink()
                     except Exception as e:
                         logger.error(f"清理临时图片失败: {e}")
                         
@@ -258,4 +288,4 @@ class AILogoPlugin(Star):
 
         except Exception as e:
             logger.error(f"ailogo error: {e}")
-            yield event.plain_result(f"❌ 生成失败: {str(e)}")
+            yield event.plain_result(f"生成失败: {str(e)}")

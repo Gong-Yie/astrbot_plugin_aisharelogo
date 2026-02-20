@@ -51,18 +51,15 @@ pip install Pillow aiohttp
 
 ## 📂 目录结构与资源放置
 
-插件第一次启动后，会自动在插件目录下生成 font 和 logo 两个文件夹。**请务必手动将您的自定义资源放入对应文件夹中**：
+插件第一次启动后，会自动生成 font 和 logo 两个文件夹。**请务必手动将您的自定义资源放入对应文件夹中**：
 
 ```Plaintext
 
 AstrBot根目录/  
-├── data/  
-│   └── plugins/  
-│       └── astrbot_plugin_aisharelogo/   <-- 插件数据主目录  
-│           ├── font/                <-- 【在此放入字体文件】(.ttf, .otf, .ttc)  
-│           ├── logo/                <-- 【在此放入底图模板】(.png, 建议上透明下红底)  
-│           ├── main.py              <-- 插件核心代码  
-│           └── _conf_schema.json    <-- WebUI 配置文件
+├── data/    
+│   └── astrbot_plugin_aisharelogo/   <-- 插件数据主目录  
+│       ├── font/                <-- 【在此放入字体文件】(.ttf, .otf, .ttc)  
+│       ├── logo/                <-- 【在此放入底图模板】(.png, 建议上透明下红底)  
 ```
 
 ---
