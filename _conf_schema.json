@@ -2,7 +2,7 @@
   "font_size": {
     "description": "自定义字体大小。若为0则根据图片宽度自动计算",
     "type": "int",
-    "default": 0
+    "default": 200
   },
   "default_font": {
     "description": "默认使用的字体文件名（必须存在于插件的 font 目录下，带后缀）",

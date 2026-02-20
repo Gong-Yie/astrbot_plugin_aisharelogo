@@ -120,6 +120,7 @@ class AILogoPlugin(Star):
 
     @filter.command("lsfont")
     async def lsfont(self, event: AstrMessageEvent):
+        """列出 font 目录下的字体文件"""
         fonts = [f for f in os.listdir(self.font_dir) if os.path.isfile(os.path.join(self.font_dir, f))]
         if not fonts:
             yield event.plain_result("font 文件夹为空，请先放入字体文件。")
@@ -128,6 +129,7 @@ class AILogoPlugin(Star):
 
     @filter.command("lslogo")
     async def lslogo(self, event: AstrMessageEvent):
+        """列出 logo 目录下的模板文件"""
         logos = [f for f in os.listdir(self.logo_dir) if os.path.isfile(os.path.join(self.logo_dir, f))]
         if not logos:
             yield event.plain_result("logo 文件夹为空，请先放入模板文件。")
@@ -136,6 +138,7 @@ class AILogoPlugin(Star):
 
     @filter.command("changefont")
     async def changefont(self, event: AstrMessageEvent, font_name: str):
+        """切换默认字体，参数为 font 目录下的字体文件名（带后缀）"""
         if not os.path.exists(os.path.join(self.font_dir, font_name)):
             yield event.plain_result(f"❌ 字体 {font_name} 不存在于 font 目录中！")
             return
@@ -145,6 +148,7 @@ class AILogoPlugin(Star):
 
     @filter.command("changelogo")
     async def changelogo(self, event: AstrMessageEvent, logo_name: str):
+        """切换默认模板，参数为 logo 目录下的模板文件名（带后缀）"""
         if not os.path.exists(os.path.join(self.logo_dir, logo_name)):
             yield event.plain_result(f"❌ 模板 {logo_name} 不存在于 logo 目录中！")
             return
@@ -154,6 +158,7 @@ class AILogoPlugin(Star):
 
     @filter.command("ailogo")
     async def ailogo(self, event: AstrMessageEvent):
+        """主指令，生成分钱 Logo"""
         # 1. 规范提取文字：AstrBot 的 message_str 只会拼接纯文本，自动过滤图文和 @
         full_text = event.message_str.strip()
         parts = full_text.split(maxsplit=1)
