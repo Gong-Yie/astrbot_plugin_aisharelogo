@@ -163,6 +163,7 @@ class AILogoPlugin(Star):
 
     @filter.command("lsfont")
     async def lsfont(self, event: AstrMessageEvent):
+        """列出所有可用字体"""
         fonts = self.get_all_assets("font")
         if not fonts:
             yield event.plain_result("font 文件夹为空，请先放入字体文件。")
@@ -171,6 +172,7 @@ class AILogoPlugin(Star):
 
     @filter.command("lslogo")
     async def lslogo(self, event: AstrMessageEvent):
+        """列出所有可用模板"""
         logos = self.get_all_assets("logo")
         if not logos:
             yield event.plain_result("logo 文件夹为空，请先放入模板文件。")
@@ -179,6 +181,7 @@ class AILogoPlugin(Star):
 
     @filter.command("changefont")
     async def changefont(self, event: AstrMessageEvent, font_name: str):
+        """切换默认字体"""
         safe_font_name = Path(font_name).name
         if not self.get_asset_path(safe_font_name, "font"):
             yield event.plain_result(f"字体 {safe_font_name} 不存在于任何 font 目录中！")
@@ -189,6 +192,7 @@ class AILogoPlugin(Star):
 
     @filter.command("changelogo")
     async def changelogo(self, event: AstrMessageEvent, logo_name: str):
+        """切换默认模板"""
         safe_logo_name = Path(logo_name).name
         if not self.get_asset_path(safe_logo_name, "logo"):
             yield event.plain_result(f"模板 {safe_logo_name} 不存在于任何 logo 目录中！")
@@ -199,6 +203,7 @@ class AILogoPlugin(Star):
 
     @filter.command("ailogo")
     async def ailogo(self, event: AstrMessageEvent):
+        """主指令：生成 Logo 图片，支持附带文本、图片、引用图片、@ 群友等多种方式输入参数。"""
         full_text = event.message_str.strip()
         parts = full_text.split(maxsplit=1)
         if len(parts) > 1 and parts[1].strip():
